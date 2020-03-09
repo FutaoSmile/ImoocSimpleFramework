@@ -1,22 +1,28 @@
 package com.futao.framework.util;
 
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.io.IOException;
+import java.net.JarURLConnection;
 import java.net.URL;
+import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
 
 /**
  * @author futao
  * @date 2020/2/28.
  */
-@Slf4j
 public class ClassUtil {
 
     public static final String FILE = "file";
     public static final String CLASS_STR = "class";
 
+    private static final Logger log = LoggerFactory.getLogger(ClassUtil.class);
 
     /**
      * 获取指定包下的类
@@ -25,27 +31,77 @@ public class ClassUtil {
      * @return
      */
     public static Set<Class<?>> extractPackageClass(String pkg) {
-        URL url = ClassUtil.getCurrentClasLoader().getResource(pkg.replace(".", "/"));
-        if (url == null) {
-            log.info("当前包[{}]下无资源", pkg);
-            return null;
-        }
-        Set<Class<?>> classSet = new HashSet<>(0);
-        //文件协议
-        String protocol = url.getProtocol();
-        if (FILE.equalsIgnoreCase(protocol)) {
-            classSet = new HashSet<>();
-            //pkg对应的文件夹绝对路径
-            File pkgDir = new File(url.getPath());
-            log.debug("pkg对应的文件夹的绝对路径为:{}", url.getPath());
-            ClassUtil.extractClassFile(classSet, pkgDir, pkg);
+        Enumeration<URL> resources = null;
+        try {
+            resources = ClassUtil.getCurrentClassLoader().getResources(pkg.replace(".", "/"));
+        } catch (IOException e) {
+            e.printStackTrace();
         }
 
-        System.out.println(classSet.toString());
+        if (resources == null) {
+            throw new RuntimeException("当前包[" + pkg + "]下无资源");
+        }
+        Set<Class<?>> classSet = new HashSet<>(0);
+        while (resources.hasMoreElements()) {
+            URL url = resources.nextElement();
+            //文件协议
+            String protocol = url.getProtocol();
+            log.info("protocol:{},port:{},path:{}", protocol, url.getPort(), url.getPath());
+            if (FILE.equalsIgnoreCase(protocol)) {
+                // TODO: 2020/2/29 支持jar文件 jar协议
+                classSet = new HashSet<>();
+                //pkg对应的文件夹绝对路径
+                File pkgDir = new File(url.getPath());
+                log.info("pkg对应的文件夹的绝对路径为:{}", url.getPath());
+                ClassUtil.extractClassFile(classSet, pkgDir, pkg);
+            } else if ("jar".equalsIgnoreCase(protocol)) {
+                try {
+                    JarURLConnection jarURLConnection = (JarURLConnection) url.openConnection();
+                    JarFile jarFile = jarURLConnection.getJarFile();
+                    extractJarFile(classSet, jarFile, pkg);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+        log.info("{}", classSet);
         return classSet;
     }
 
+    /**
+     * 加载.jar中的class文件 打成jar包 会走这
+     *
+     * @param classSet
+     * @param jarFile
+     * @param pkg
+     */
+    private static void extractJarFile(Set<Class<?>> classSet, JarFile jarFile, String pkg) {
+        Enumeration<JarEntry> entries = jarFile.entries();
+        while (entries.hasMoreElements()) {
+            JarEntry jarEntry = entries.nextElement();
+            //  com/futao/imooc/Test.class
+            String jarEntryName = jarEntry.getName();
+            if (jarEntryName.startsWith(pkg.replace(".", "/")) && jarEntryName.endsWith(".class")) {
+                //将`/`替换成`.`的形式并且返回类的包路径和类名
+                String pkgAndClassName = jarEntryName.substring(0, jarEntryName.lastIndexOf(".")).replace(File.separator, ".");
+                try {
+                    log.info("从jar文件中读取到class[{}]", pkgAndClassName);
+                    classSet.add(Class.forName(pkgAndClassName));
+                } catch (ClassNotFoundException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
 
+    }
+
+    /**
+     * 加载   .class文件，通过IDEA直接启动，会走这
+     *
+     * @param classSet
+     * @param pkgDir
+     * @param pkg
+     */
     private static void extractClassFile(Set<Class<?>> classSet, File pkgDir, String pkg) {
         String path = pkgDir.getPath();
         if (pkgDir.isDirectory()) {
@@ -81,12 +137,7 @@ public class ClassUtil {
      *
      * @return
      */
-    public static ClassLoader getCurrentClasLoader() {
+    private static ClassLoader getCurrentClassLoader() {
         return Thread.currentThread().getContextClassLoader();
     }
-
-    public static void main(String[] args) {
-        ClassUtil.extractPackageClass("com.futao");
-    }
-
 }
